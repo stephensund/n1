@@ -1,4 +1,4 @@
-name: Build ImmortalWrt-24.10 for N1 with ROOTFS
+name: Build ImmortalWrt-25.12 for N1 with ROOTFS
 
 on:
   workflow_dispatch:
