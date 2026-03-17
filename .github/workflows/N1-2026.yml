@@ -11,10 +11,7 @@ on:
         options:
           - true
           - false
-#  schedule:
-#    - cron: "0 0 1,16 * *"
 
-# 确保 GITHUB_TOKEN 有发布 Release 的写权限（最小侵入）
 permissions:
   contents: write
 
@@ -43,13 +40,21 @@ jobs:
         docker-images: true
         swap-storage: true
 
+    # ✅ 增加 4GB Swap（核心修复：防止 perl/luci 编译时卡死）
+    - name: Add swap
+      run: |
+        sudo fallocate -l 4G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        free -h
+
     - name: Initialize environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt-get -qq update > /dev/null
         sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/2410) > /dev/null
-        # 👇 NEW: 补充 OpenWrt prereq 缺的 ncurses 头文件与库（Ubuntu 24.04）
         sudo -E apt-get -qq install -y libncurses-dev > /dev/null
         sudo -E apt-get -qq autoremove --purge > /dev/null
         sudo -E apt-get -qq clean > /dev/null
@@ -92,8 +97,9 @@ jobs:
       run: |
         chmod -R 755 openwrt
         cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(( $(nproc) + 1 )) || make -j1 V=s
+        echo "Use 1 thread for stable build"
+        # ❗ 强制使用 -j1 + V=s（防卡死的最终方案）
+        make -j1 V=s
 
     - name: Package armsr as openwrt
       uses: unifreq/openwrt_packit@master
@@ -108,19 +114,17 @@ jobs:
         SW_FLOWOFFLOAD: 0
         SFE_FLOW: 0
 
-    # 新增：定位 rootfs 路径，并导出到环境变量 ROOTFS_PATH
     - name: Locate rootfs
       id: rootfs
       run: |
         ROOTFS=$(ls -1 openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz | head -n 1)
         if [ -z "$ROOTFS" ]; then
-          echo "No rootfs found under openwrt/bin/targets/armsr/armv8/"; exit 1
+          echo "No rootfs found"; exit 1
         fi
         echo "ROOTFS_PATH=$ROOTFS" >> $GITHUB_ENV
         echo "rootfs=$ROOTFS" >> $GITHUB_OUTPUT
         echo "Found ROOTFS: $ROOTFS"
 
-    # 可选：同时作为工件上传，便于调试下载（可删除本步）
     - name: Upload rootfs as artifact (optional)
       uses: actions/upload-artifact@v4
       with:
@@ -138,7 +142,6 @@ jobs:
           ${{ env.ROOTFS_PATH }}
         body: |
           首次使用建议全新刷写
-          * 基本信息
           IP: 192.168.2.5
           账户: root
           密码: password
