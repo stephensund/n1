@@ -98,8 +98,7 @@ jobs:
         chmod -R 755 openwrt
         cd openwrt
         echo "Use 1 thread for stable build"
-        # ❗ 强制使用 -j1 + V=s（防卡死的最终方案）
-        make -j1 V=s
+        make -j2 V=99
 
     - name: Package armsr as openwrt
       uses: unifreq/openwrt_packit@master
