@@ -98,7 +98,7 @@ jobs:
         chmod -R 755 openwrt
         cd openwrt
         echo "Use 1 thread for stable build"
-        make -j2 V=99
+        make -j2 --quiet
 
     - name: Package armsr as openwrt
       uses: unifreq/openwrt_packit@master
