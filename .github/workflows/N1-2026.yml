@@ -100,6 +100,76 @@ jobs:
         echo "Use 1 thread for stable build"
         make -j2 --quiet
 
+    - name: Inject Mihomo ARM64 Core + GEO Files + Default Meta
+      run: |
+        # -----------------------------
+        # 1. Fetch latest Mihomo tag
+        # -----------------------------
+        TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | grep tag_name | sed 's/.*"tag_name": "\(.*\)".*/\1/')
+        echo "Latest Mihomo tag: $TAG"
+
+        # -----------------------------
+        # 2. Download Mihomo ARM64 Core
+        # -----------------------------
+        CORE_URL="https://github.com/MetaCubeX/mihomo/releases/download/${TAG}/mihomo-linux-arm64-${TAG}.gz"
+
+        mkdir -p mihomo_core
+        echo "Downloading Mihomo ARM64 core..."
+        curl -L "$CORE_URL" -o mihomo_core/mihomo.gz
+        gunzip mihomo_core/mihomo.gz
+        chmod +x mihomo_core/mihomo
+
+        # -----------------------------
+        # 3. Download Loyalsoldier GEO Files
+        # -----------------------------
+        GEOIP_URL="https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat"
+        GEOSITE_URL="https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat"
+
+        mkdir -p geo_files
+        curl -L $GEOIP_URL -o geo_files/geoip.dat
+        curl -L $GEOSITE_URL -o geo_files/geosite.dat
+
+        # -----------------------------
+        # 4. Unpack rootfs
+        # -----------------------------
+        ROOTFS=$(ls -1 openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz | head -n 1)
+        echo "Using ROOTFS: $ROOTFS"
+
+        rm -rf rootfs_work
+        mkdir rootfs_work
+        tar -xzf "$ROOTFS" -C rootfs_work
+
+        # -----------------------------
+        # 5. Install Mihomo core
+        # -----------------------------
+        mkdir -p rootfs_work/etc/openclash/core
+        cp -f mihomo_core/mihomo rootfs_work/etc/openclash/core/clash-meta
+        chmod +x rootfs_work/etc/openclash/core/clash-meta
+
+        # -----------------------------
+        # 6. Install GEO files
+        # -----------------------------
+        cp -f geo_files/geoip.dat rootfs_work/etc/openclash/
+        cp -f geo_files/geosite.dat rootfs_work/etc/openclash/
+
+        # -----------------------------
+        # 7. Force Meta as default
+        # -----------------------------
+        echo "meta" > rootfs_work/etc/openclash/core_version
+
+        if [ ! -f rootfs_work/etc/openclash/config.yaml ]; then
+            echo "core_type: meta" > rootfs_work/etc/openclash/config.yaml
+        else
+            sed -i "s/^core_type:.*/core_type: meta/" rootfs_work/etc/openclash/config.yaml || true
+        fi
+
+        # -----------------------------
+        # 8. Repack rootfs
+        # -----------------------------
+        tar -czf "$ROOTFS" -C rootfs_work .
+
+        echo "Mihomo (dynamic latest) + GEO injection completed."
+
     - name: Package armsr as openwrt
       uses: unifreq/openwrt_packit@master
       env:
