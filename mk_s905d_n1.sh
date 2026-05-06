@@ -126,8 +126,8 @@ SSHD_CIPHERS="aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes256-ctr,aes192-ct
 check_depends
 
 SKIP_MB=4
-BOOT_MB=256
-ROOTFS_MB=960
+BOOT_MB=384
+ROOTFS_MB=1280
 SIZE=$((SKIP_MB + BOOT_MB + ROOTFS_MB))
 create_image "$TGT_IMG" "$SIZE"
 create_partition "$TGT_DEV" "msdos" "$SKIP_MB" "$BOOT_MB" "fat32" "0" "-1" "btrfs"
@@ -188,3 +188,4 @@ mv ${TGT_IMG} ${OUTPUT_DIR} && sync
 echo "镜像已生成! 存放在 ${OUTPUT_DIR} 下面!"
 echo "========================== end $0 ================================"
 echo
+
