@@ -2,15 +2,6 @@ name: Build ImmortalWrt-25.12 for N1-TEST
 
 on:
   workflow_dispatch:
-    inputs:
-      ssh:
-        description: 'SSH connection to Actions'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-          - true
-          - false
 
 permissions:
   contents: write
@@ -72,10 +63,15 @@ jobs:
         run: |
           rm -rf openwrt/files openwrt/.config
           mv files .config openwrt/
+          # 将自定义 .config 备份为 .config.old，防止 make download 触发 menuconfig
+          cp openwrt/.config openwrt/.config.old
 
       - name: Download package
         working-directory: ./openwrt
+        env:
+          CONFIG_SKIP: "y"
         run: |
+          make defconfig
           make download -j$(($(nproc) * 2))
           find dl -size -1k -exec rm -f {} \;
 
