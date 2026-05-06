@@ -101,103 +101,86 @@ jobs:
 
       - name: Inject Mihomo + GEO (into rootfs)
         run: |
+          set -e
+
+          retry_download() {
+            local name="$1"
+            local cmd="$2"
+            local check="$3"
+            local max_retry=3
+            local i=1
+
+            while [ $i -le $max_retry ]; do
+              echo "[$name] 下载尝试 $i/$max_retry ..."
+              rm -f tmp_download
+              if eval "$cmd" && eval "$check"; then
+                echo "[$name] 下载成功"
+                return 0
+              fi
+              i=$((i + 1))
+              sleep 2
+            done
+
+            echo "❌ 未成功集成 $name ，已重试 $max_retry 次"
+            exit 1
+          }
+
           # 1. 找到并保存原始 rootfs 路径
           ORIGINAL_ROOTFS=$(ls -1 openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz | head -n 1)
           echo "Original ROOTFS: $ORIGINAL_ROOTFS"
-          
-          # 创建临时目录用于修改
-          rm -rf rootfs_work
-          mkdir -p rootfs_work
+
+          rm -rf rootfs_work mihomo_core geo_files
+          mkdir -p rootfs_work mihomo_core geo_files
           tar -xzf "$ORIGINAL_ROOTFS" -C rootfs_work
 
-          # 创建必要的目录（修复：添加这些目录的创建）
-          mkdir -p mihomo_core
-          mkdir -p geo_files
-
           # 2. 获取最新 Mihomo 版本
-          TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | grep tag_name | sed 's/.*"tag_name": "\(.*\)".*/\1/')
+          TAG=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | grep tag_name | sed 's/.*"tag_name": "\(.*\)".*/\1/')
           echo "Latest Mihomo tag: $TAG"
 
           CORE_URL="https://github.com/MetaCubeX/mihomo/releases/download/${TAG}/mihomo-linux-arm64-${TAG}.gz"
-          
-          echo "Downloading Mihomo ARM64 core..."
-          curl -sL "$CORE_URL" | gunzip > mihomo_core/mihomo
+
+          retry_download \
+            "Mihomo Meta 内核" \
+            "curl -fL \"$CORE_URL\" -o tmp_download && gunzip -c tmp_download > mihomo_core/mihomo" \
+            "[ -s mihomo_core/mihomo ]"
+
           chmod +x mihomo_core/mihomo
 
-          # 3. 下载 GEO 文件
-          curl -sL "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat" -o geo_files/geoip.dat
-          curl -sL "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" -o geo_files/geosite.dat
+          retry_download \
+            "GEOIP 数据库" \
+            "curl -fL https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat -o geo_files/geoip.dat" \
+            "[ -s geo_files/geoip.dat ]"
 
-          # 4. 安装到正确位置 (OpenClash 标准路径)
+          retry_download \
+            "GEOSITE 数据库" \
+            "curl -fL https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat -o geo_files/geosite.dat" \
+            "[ -s geo_files/geosite.dat ]"
+
+          # 3. 安装到 OpenClash 标准路径
           mkdir -p rootfs_work/usr/share/openclash/core
-          
-          # 安装核心
           cp -f mihomo_core/mihomo rootfs_work/usr/share/openclash/core/clash_meta
           chmod +x rootfs_work/usr/share/openclash/core/clash_meta
-          
-          # 安装 GEO 文件
+
           cp -f geo_files/geoip.dat rootfs_work/usr/share/openclash/geoip.dat
           cp -f geo_files/geosite.dat rootfs_work/usr/share/openclash/geosite.dat
-          
-          # 软链接到 /etc/openclash (OpenClash 也会读取这里)
-          mkdir -p rootfs_work/etc/openclash
+
+          mkdir -p rootfs_work/etc/openclash/core
           ln -sf ../usr/share/openclash/geoip.dat rootfs_work/etc/openclash/geoip.dat
           ln -sf ../usr/share/openclash/geosite.dat rootfs_work/etc/openclash/geosite.dat
           ln -sf ../../usr/share/openclash/core/clash_meta rootfs_work/etc/openclash/core/clash_meta
 
-          # 5. 创建 OpenClash 配置
-          mkdir -p rootfs_work/etc/config
-          cat > rootfs_work/etc/config/openclash << 'EOF'
-          config openclash 'config'
-              option enable '0'
-              option dev_mode 'false'
-              option dns_port '1053'
-              option ipv6 'false'
-              option ipv6_dns '0'
-              option routing_indication '0'
-              option redirect_dns '1'
-              option resolution_mod '0'
-              option cheap_level '0'
-              option auto_update 'true'
-              option auto_restart 'true'
-              option store_fakeip '1'
-              option store_cache '1'
-              option interface_name 'tor+'
-              option proxy_mode 'fake-ip'
-              option set_permission '0777'
-              option enable_logging '0'
-              option log_level 'silent'
-              option google_domains_mod '0'
-              list enforce_mode '0'
-              option tproxy_port '7893'
-              option proxy_port '7892'
-              option http_port '7892'
-              option socks_port '7891'
-              option enable_redirect_dns '1'
-              option enable_udp_proxy '1'
-              option multi_mode 'redir_host'
-              option enable_rule_generator '1'
-              option ipv6_mode '0'
-              option mixed_port '7890'
-              option enable_rule_mini '0'
-              option enable_custom_clash_proxies '1'
-              option enable_meta_core '1'
-          EOF
-
-          # 6. 设置 Meta 为默认核心
-          mkdir -p rootfs_work/etc/openclash/core
+          # 4. 设置 Meta 为默认核心
           echo "meta" > rootfs_work/etc/openclash/core/core_version
           echo "meta" > rootfs_work/etc/openclash/core/custom_core_version
 
-          # 7. 重新打包 rootfs
-          # 先删除原始文件，再用修改后的版本替换
+          # 5. 回打包 rootfs
           rm -f "$ORIGINAL_ROOTFS"
           tar -czf "$ORIGINAL_ROOTFS" -C rootfs_work .
-          
-          # 清理临时目录
-          rm -rf rootfs_work
-          
-          echo "Mihomo + GEO 注入完成"
+
+          rm -rf rootfs_work mihomo_core geo_files tmp_download
+
+          echo "✅ Mihomo + GEO 已成功注入"
           ls -lh "$ORIGINAL_ROOTFS"
 
 
