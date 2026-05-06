@@ -40,14 +40,6 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: Add swap
-        run: |
-          sudo fallocate -l 4G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
       - name: Initialize environment
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -81,15 +73,10 @@ jobs:
           rm -rf openwrt/files openwrt/.config
           mv files .config openwrt/
 
-      - name: SSH connect to Actions
-        uses: P3TERX/ssh2actions@main
-        if: github.event.inputs.ssh == 'true'
-
       - name: Download package
         working-directory: ./openwrt
         run: |
-          make defconfig
-          make download -j$(( $(nproc) * 2 ))
+          make download -j$(($(nproc) * 2))
           find dl -size -1k -exec rm -f {} \;
 
       - name: Compile N1 firmware
@@ -99,90 +86,155 @@ jobs:
           echo "Use 2 threads for stable build"
           make -j2 --quiet
 
+      - name: Verify build output
+        run: |
+          ROOTFS=$(ls -1 openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz 2>/dev/null | head -n 1)
+          if [ -z "$ROOTFS" ] || [ ! -f "$ROOTFS" ]; then
+            echo "❌ 编译失败：未生成 rootfs.tar.gz"
+            exit 1
+          fi
+          echo "✅ 编译成功：$(basename "$ROOTFS")"
+          ls -lh "$ROOTFS"
+
       - name: Inject Mihomo + GEO (into rootfs)
         run: |
-          set -e
-
-          retry_download() {
-            local name="$1"
-            local cmd="$2"
-            local check="$3"
-            local max_retry=3
-            local i=1
-
-            while [ $i -le $max_retry ]; do
-              echo "[$name] 下载尝试 $i/$max_retry ..."
-              rm -f tmp_download
-              if eval "$cmd" && eval "$check"; then
-                echo "[$name] 下载成功"
-                return 0
-              fi
-              i=$((i + 1))
-              sleep 2
-            done
-
-            echo "❌ 未成功集成 $name ，已重试 $max_retry 次"
-            exit 1
-          }
-
-          # 1. 找到并保存原始 rootfs 路径
+          # 找到原始 rootfs 路径
           ORIGINAL_ROOTFS=$(ls -1 openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz | head -n 1)
-          echo "Original ROOTFS: $ORIGINAL_ROOTFS"
+          echo "原始 ROOTFS: $ORIGINAL_ROOTFS"
 
           rm -rf rootfs_work mihomo_core geo_files
           mkdir -p rootfs_work mihomo_core geo_files
           tar -xzf "$ORIGINAL_ROOTFS" -C rootfs_work
 
-          # 2. 获取最新 Mihomo 版本
-          TAG=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-            | grep tag_name | sed 's/.*"tag_name": "\(.*\)".*/\1/')
-          echo "Latest Mihomo tag: $TAG"
+          # ── 获取 Mihomo Alpha 版本号 ──
+          # 解析 release 页面，提取 mihomo-linux-arm64-alpha-*.gz 的实际版本号
+          RELEASE_PAGE=$(curl -fsSL https://github.com/MetaCubeX/mihomo/releases/tag/Prerelease-Alpha)
+          MIHO_VERSION=$(echo "$RELEASE_PAGE" | grep -oP 'mihomo-linux-arm64-alpha-\K[a-f0-9]+(?=\.gz)')
+          echo "Mihomo Alpha 版本: $MIHO_VERSION"
 
-          CORE_URL="https://github.com/MetaCubeX/mihomo/releases/download/${TAG}/mihomo-linux-arm64-${TAG}.gz"
+          if [ -z "$MIHO_VERSION" ]; then
+            echo "❌ Mihomo 内核：无法获取版本号，解析 Prerelease-Alpha 页面失败"
+            exit 1
+          fi
 
-          retry_download \
-            "Mihomo Meta 内核" \
-            "curl -fL \"$CORE_URL\" -o tmp_download && gunzip -c tmp_download > mihomo_core/mihomo" \
-            "[ -s mihomo_core/mihomo ]"
+          CORE_URL="https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/mihomo-linux-arm64-alpha-${MIHO_VERSION}.gz"
+          echo "下载链接: $CORE_URL"
 
-          chmod +x mihomo_core/mihomo
+          # ── 下载函数（显示明确的成功/失败状态） ──
+          download_with_retry() {
+            local name="$1"
+            local url="$2"
+            local dest="$3"
+            local max_retry=3
+            local i=1
 
-          retry_download \
-            "GEOIP 数据库" \
-            "curl -fL https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat -o geo_files/geoip.dat" \
-            "[ -s geo_files/geoip.dat ]"
+            while [ $i -le $max_retry ]; do
+              echo "▶ [$name] 下载尝试 $i/$max_retry ..."
 
-          retry_download \
-            "GEOSITE 数据库" \
-            "curl -fL https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat -o geo_files/geosite.dat" \
-            "[ -s geo_files/geosite.dat ]"
+              if curl -fL "$url" -o "$dest.gz" 2>/dev/null; then
+                if gunzip -f "$dest.gz" 2>/dev/null; then
+                  if [ -s "$dest" ]; then
+                    echo "✅ [$name] 下载成功"
+                    chmod +x "$dest"
+                    return 0
+                  else
+                    echo "⚠️ [$name] 解压后文件为空"
+                  fi
+                else
+                  echo "⚠️ [$name] 解压失败"
+                fi
+              else
+                echo "⚠️ [$name] 下载失败（HTTP 错误）"
+              fi
 
-          # 3. 安装到 OpenClash 标准路径
-          mkdir -p rootfs_work/usr/share/openclash/core
-          cp -f mihomo_core/mihomo rootfs_work/usr/share/openclash/core/clash_meta
-          chmod +x rootfs_work/usr/share/openclash/core/clash_meta
+              i=$((i + 1))
+              [ $i -le $max_retry ] && echo "   等待 2 秒后重试..."
+              sleep 2
+            done
 
-          cp -f geo_files/geoip.dat rootfs_work/usr/share/openclash/geoip.dat
-          cp -f geo_files/geosite.dat rootfs_work/usr/share/openclash/geosite.dat
+            echo "❌ [$name] 下载失败，已重试 $max_retry 次"
+            return 1
+          }
 
+          # ── 下载 Mihomo Alpha 内核 ──
+          if download_with_retry "Mihomo Alpha 内核" "$CORE_URL" "mihomo_core/mihomo"; then
+            MIHO_OK=1
+          else
+            MIHO_OK=0
+          fi
+
+          # ── 下载 GEOIP 数据库 ──
+          if download_with_retry "GEOIP 数据库" \
+            "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip.dat" \
+            "geo_files/geoip.dat"; then
+            GEOIP_OK=1
+          else
+            GEOIP_OK=0
+          fi
+
+          # ── 下载 GEOSITE 数据库 ──
+          if download_with_retry "GEOSITE 数据库" \
+            "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" \
+            "geo_files/geosite.dat"; then
+            GEOSITE_OK=1
+          else
+            GEOSITE_OK=0
+          fi
+
+          # ── 安装到 OpenClash 标准路径 ──
+          if [ "$MIHO_OK" -eq 1 ]; then
+            mkdir -p rootfs_work/usr/share/openclash/core
+            cp -f mihomo_core/mihomo rootfs_work/usr/share/openclash/core/clash_meta
+            chmod +x rootfs_work/usr/share/openclash/core/clash_meta
+
+            # 设置 Meta 为默认核心
+            echo "meta" > rootfs_work/etc/openclash/core/core_version
+            echo "meta" > rootfs_work/etc/openclash/core/custom_core_version
+
+            echo "✅ Mihomo Alpha 内核已安装"
+          else
+            echo "⚠️ 跳过 Mihomo 内核安装（下载失败）"
+          fi
+
+          if [ "$GEOIP_OK" -eq 1 ]; then
+            mkdir -p rootfs_work/usr/share/openclash
+            cp -f geo_files/geoip.dat rootfs_work/usr/share/openclash/geoip.dat
+            echo "✅ GEOIP 数据库已安装"
+          else
+            echo "⚠️ 跳过 GEOIP 安装（下载失败）"
+          fi
+
+          if [ "$GEOSITE_OK" -eq 1 ]; then
+            cp -f geo_files/geosite.dat rootfs_work/usr/share/openclash/geosite.dat
+            echo "✅ GEOSITE 数据库已安装"
+          else
+            echo "⚠️ 跳过 GEOSITE 安装（下载失败）"
+          fi
+
+          # ── 创建符号链接 ──
           mkdir -p rootfs_work/etc/openclash/core
-          ln -sf ../usr/share/openclash/geoip.dat rootfs_work/etc/openclash/geoip.dat
-          ln -sf ../usr/share/openclash/geosite.dat rootfs_work/etc/openclash/geosite.dat
-          ln -sf ../../usr/share/openclash/core/clash_meta rootfs_work/etc/openclash/core/clash_meta
+          [ "$MIHO_OK" -eq 1 ] && \
+            ln -sf ../../usr/share/openclash/core/clash_meta rootfs_work/etc/openclash/core/clash_meta
+          [ "$GEOIP_OK" -eq 1 ] && \
+            ln -sf ../usr/share/openclash/geoip.dat rootfs_work/etc/openclash/geoip.dat
+          [ "$GEOSITE_OK" -eq 1 ] && \
+            ln -sf ../usr/share/openclash/geosite.dat rootfs_work/etc/openclash/geosite.dat
 
-          # 4. 设置 Meta 为默认核心
-          echo "meta" > rootfs_work/etc/openclash/core/core_version
-          echo "meta" > rootfs_work/etc/openclash/core/custom_core_version
-
-          # 5. 回打包 rootfs
+          # ── 重新打包 rootfs ──
+          echo "▶ 正在重新打包 rootfs..."
           rm -f "$ORIGINAL_ROOTFS"
           tar -czf "$ORIGINAL_ROOTFS" -C rootfs_work .
 
-          rm -rf rootfs_work mihomo_core geo_files tmp_download
-
-          echo "✅ Mihomo + GEO 已成功注入"
+          # ── 清理临时文件 ──
+          rm -rf rootfs_work mihomo_core geo_files
+          echo ""
+          echo "=== 注入结果汇总 ==="
+          echo "  Mihomo Alpha:  $([ "$MIHO_OK" -eq 1 ] && echo '✅ 已注入' || echo '❌ 失败')"
+          echo "  GEOIP:         $([ "$GEOIP_OK" -eq 1 ] && echo '✅ 已注入' || echo '❌ 失败')"
+          echo "  GEOSITE:       $([ "$GEOSITE_OK" -eq 1 ] && echo '✅ 已注入' || echo '❌ 失败')"
+          echo "===================="
+          echo "✅ Mihomo + GEO 注入完成"
           ls -lh "$ORIGINAL_ROOTFS"
-
 
       - name: Package armsr as openwrt
         uses: unifreq/openwrt_packit@master
@@ -205,17 +257,23 @@ jobs:
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.xz
             openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
           body: |
-            首次使用建议全新刷写
+            **ImmortalWrt 25.12 N1 专用固件**
+
+            📌 首次使用建议全新刷写
             IP: 192.168.2.5
-            账户: root
-            密码: password
-      
-            已内置 Mihomo (Clash Meta) 内核及 GEO 数据库
-      
-            包含 rootfs.tar.gz 便于救砖和定制
-              
+            账户: root / 密码: password
+
+            📦 已内置：
+            - Mihomo (Clash Meta) Alpha 内核
+            - GEOIP / GEOSITE 数据库
+            - OpenClash
+
+            💾 包含 rootfs.tar.gz 便于救砖和定制
+
+            🏗️ 构建时间: ${{ env.PACKAGED_OUTPUTDATE }}
+
       - name: Delete old releases
         uses: dev-drprasad/delete-older-releases@master
         with:
-          keep_latest: 2
+          keep-latest: 2
           delete_tags: true
