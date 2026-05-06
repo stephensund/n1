@@ -110,6 +110,10 @@ jobs:
           mkdir -p rootfs_work
           tar -xzf "$ORIGINAL_ROOTFS" -C rootfs_work
 
+          # 创建必要的目录（修复：添加这些目录的创建）
+          mkdir -p mihomo_core
+          mkdir -p geo_files
+
           # 2. 获取最新 Mihomo 版本
           TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | grep tag_name | sed 's/.*"tag_name": "\(.*\)".*/\1/')
           echo "Latest Mihomo tag: $TAG"
@@ -195,6 +199,7 @@ jobs:
           
           echo "Mihomo + GEO 注入完成"
           ls -lh "$ORIGINAL_ROOTFS"
+
 
       - name: Package armsr as openwrt
         uses: unifreq/openwrt_packit@master
