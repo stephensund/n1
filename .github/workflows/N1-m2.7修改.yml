@@ -96,7 +96,7 @@ jobs:
         run: |
           chmod -R 755 openwrt
           cd openwrt
-          echo "Use 1 thread for stable build"
+          echo "Use 2 threads for stable build"
           make -j2 --quiet
 
       - name: Inject Mihomo + GEO (into rootfs)
