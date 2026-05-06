@@ -133,6 +133,9 @@ jobs:
 
               if curl -fL "$url" -o "$dest.gz" 2>/dev/null; then
                 if gunzip -f "$dest.gz" 2>/dev/null; then
+                  # 解压后文件名为 mihomo-linux-arm64，重命名为 mihomo
+                  BASE_DIR=$(dirname "$dest")
+                  mv -f "$BASE_DIR/mihomo-linux-arm64" "$dest"
                   if [ -s "$dest" ]; then
                     echo "✅ [$name] 下载成功"
                     chmod +x "$dest"
@@ -181,44 +184,32 @@ jobs:
             GEOSITE_OK=0
           fi
 
-          # ── 安装到 OpenClash 标准路径 ──
+          # ── 安装到 OpenClash 路径 ──
+          # 内核: /etc/openclash/core/clash_meta
+          # GEO:  /etc/openclash/
+          mkdir -p rootfs_work/etc/openclash/core
+
           if [ "$MIHO_OK" -eq 1 ]; then
-            mkdir -p rootfs_work/usr/share/openclash/core
-            cp -f mihomo_core/mihomo rootfs_work/usr/share/openclash/core/clash_meta
-            chmod +x rootfs_work/usr/share/openclash/core/clash_meta
-
-            # 设置 Meta 为默认核心
-            echo "meta" > rootfs_work/etc/openclash/core/core_version
-            echo "meta" > rootfs_work/etc/openclash/core/custom_core_version
-
-            echo "✅ Mihomo Alpha 内核已安装"
+            cp -f mihomo_core/mihomo rootfs_work/etc/openclash/core/clash_meta
+            chmod +x rootfs_work/etc/openclash/core/clash_meta
+            echo "✅ Mihomo Alpha 内核已安装到 /etc/openclash/core/clash_meta"
           else
             echo "⚠️ 跳过 Mihomo 内核安装（下载失败）"
           fi
 
           if [ "$GEOIP_OK" -eq 1 ]; then
-            mkdir -p rootfs_work/usr/share/openclash
-            cp -f geo_files/geoip.dat rootfs_work/usr/share/openclash/geoip.dat
-            echo "✅ GEOIP 数据库已安装"
+            cp -f geo_files/geoip.dat rootfs_work/etc/openclash/geoip.dat
+            echo "✅ GEOIP 数据库已安装到 /etc/openclash/geoip.dat"
           else
             echo "⚠️ 跳过 GEOIP 安装（下载失败）"
           fi
 
           if [ "$GEOSITE_OK" -eq 1 ]; then
-            cp -f geo_files/geosite.dat rootfs_work/usr/share/openclash/geosite.dat
-            echo "✅ GEOSITE 数据库已安装"
+            cp -f geo_files/geosite.dat rootfs_work/etc/openclash/geosite.dat
+            echo "✅ GEOSITE 数据库已安装到 /etc/openclash/geosite.dat"
           else
             echo "⚠️ 跳过 GEOSITE 安装（下载失败）"
           fi
-
-          # ── 创建符号链接 ──
-          mkdir -p rootfs_work/etc/openclash/core
-          [ "$MIHO_OK" -eq 1 ] && \
-            ln -sf ../../usr/share/openclash/core/clash_meta rootfs_work/etc/openclash/core/clash_meta
-          [ "$GEOIP_OK" -eq 1 ] && \
-            ln -sf ../usr/share/openclash/geoip.dat rootfs_work/etc/openclash/geoip.dat
-          [ "$GEOSITE_OK" -eq 1 ] && \
-            ln -sf ../usr/share/openclash/geosite.dat rootfs_work/etc/openclash/geosite.dat
 
           # ── 重新打包 rootfs ──
           echo "▶ 正在重新打包 rootfs..."
