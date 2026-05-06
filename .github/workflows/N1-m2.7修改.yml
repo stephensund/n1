@@ -220,14 +220,17 @@ jobs:
           tag_name: OpenWrt_${{ env.PACKAGED_OUTPUTDATE }}
           files: |
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.xz
+            openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
           body: |
             首次使用建议全新刷写
             IP: 192.168.2.5
             账户: root
             密码: password
-            
+      
             已内置 Mihomo (Clash Meta) 内核及 GEO 数据库
-
+      
+            包含 rootfs.tar.gz 便于救砖和定制
+              
       - name: Delete old releases
         uses: dev-drprasad/delete-older-releases@master
         with:
