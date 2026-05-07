@@ -265,7 +265,9 @@ jobs:
           echo "  GEOIP:         $([ "$GEOIP_OK" -eq 1 ] && echo '✅ 已注入' || echo '❌ 失败')"
           echo "  GEOSITE:       $([ "$GEOSITE_OK" -eq 1 ] && echo '✅ 已注入' || echo '❌ 失败')"
           echo "===================="
-          echo "✅ Mihomo + GEO 注入完成"
+          if [ "$MIHO_OK" -eq 1 ] && [ "$GEOIP_OK" -eq 1 ] && [ "$GEOSITE_OK" -eq 1 ]; then
+            echo "✅ Mihomo + GEO 注入完成"
+          fi
           ls -lh "$ORIGINAL_ROOTFS"
 
       - name: Package armsr as openwrt
