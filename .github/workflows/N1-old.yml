@@ -64,10 +64,11 @@ jobs:
         ./scripts/feeds update -a
         $GITHUB_WORKSPACE/diy.sh
         ./scripts/feeds update -a
-        ./scripts/feeds install -a
         cd package
         git clone https://github.com/sirpdboy/luci-theme-kucat
         git clone https://github.com/sirpdboy/luci-app-kucat-config
+        cd ..
+        ./scripts/feeds install -a
 
     - name: Load N1 custom config
       run: |
